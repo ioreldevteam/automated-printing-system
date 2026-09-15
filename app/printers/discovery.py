@@ -18,38 +18,56 @@ class DiscoveredPrinter:
 def discover_cups_printers() -> list[DiscoveredPrinter]:
     """Return printers known to CUPS without failing application startup.
 
-    CUPS normally exposes USB printers, including Epson LQ-310 queues, through
-    ``lpstat``. Discovery is intentionally metadata-only; printing still uses
-    an explicitly configured adapter.
+    CUPS exposes both USB and network/Wi‑Fi printers through ``lpstat``. Some
+    setups return a minimal `lpstat -p -v` output while others use a default
+    destination summary; we accept both forms and treat them as valid CUPS
+    printers. Discovery is intentionally metadata-only; printing still uses an
+    explicitly configured adapter.
     """
     lpstat = shutil.which("lpstat")
     if lpstat is None:
         return []
-    try:
-        result = subprocess.run(
-            [lpstat, "-p", "-v"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if result.returncode != 0:
-        return []
+
+    commands = [
+        [lpstat, "-p", "-v"],
+        [lpstat, "-s", "-v"],
+    ]
 
     printers: dict[str, DiscoveredPrinter] = {}
-    for line in result.stdout.splitlines():
-        printer_match = re.match(r"printer (\S+) (.*)", line)
-        if printer_match:
-            name, _ = printer_match.groups()
-            printers[name] = DiscoveredPrinter(name=name)
+    for command in commands:
+        try:
+            result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
             continue
-        device_match = re.match(r"device for (\S+): (\S+)", line)
-        if device_match:
-            name, uri = device_match.groups()
-            existing = printers.get(name, DiscoveredPrinter(name=name))
-            printers[name] = DiscoveredPrinter(
-                name=existing.name, uri=uri, model=existing.model, source=existing.source
-            )
+        if result.returncode != 0 and result.returncode != 1:
+            continue
+
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+
+            printer_match = re.match(r"printer\s+(\S+)\s+.*", line)
+            if printer_match:
+                name = printer_match.group(1)
+                printers.setdefault(name, DiscoveredPrinter(name=name))
+                continue
+
+            default_match = re.match(r"system default destination:\s*(\S+)", line)
+            if default_match:
+                name = default_match.group(1)
+                printers.setdefault(name, DiscoveredPrinter(name=name))
+                continue
+
+            device_match = re.match(r"device for\s+(\S+):\s*(.+)$", line)
+            if device_match:
+                name, uri = device_match.groups()
+                existing = printers.get(name, DiscoveredPrinter(name=name))
+                source = "USB" if uri.lower().startswith("usb://") else "NETWORK"
+                printers[name] = DiscoveredPrinter(
+                    name=existing.name,
+                    uri=uri.strip(),
+                    model=existing.model,
+                    source=source,
+                )
+
     return list(printers.values())
