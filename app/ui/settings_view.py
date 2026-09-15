@@ -25,6 +25,7 @@ from app.database.models import User
 from app.database.repositories import ProductRepository
 from app.domain.exceptions import ProductionError
 from app.domain.states import Role, role_can
+from app.ui.printer_view import PrinterViewWidget
 
 
 class SettingsViewWidget(QWidget):
@@ -54,13 +55,9 @@ class SettingsViewWidget(QWidget):
             products_layout.addLayout(form)
         layout.addWidget(products_box)
 
-        printers_box = QGroupBox("Configured Printers (from config.yaml)")
+        printers_box = QGroupBox("Printers")
         printers_layout = QVBoxLayout(printers_box)
-        for cfg in context.config.printers:
-            mode = "SIMULATED" if cfg.simulate else "LIVE"
-            printers_layout.addWidget(
-                QLabel(f"{cfg.name}: {cfg.type} {cfg.model} @ {cfg.address}:{cfg.port} [{mode}]")
-            )
+        printers_layout.addWidget(PrinterViewWidget(context, Role(current_user.role)))
         layout.addWidget(printers_box)
 
         retry_box = QGroupBox("Retry Policy")

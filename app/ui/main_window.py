@@ -13,9 +13,7 @@ from app.database.database import session_scope
 from app.database.models import User
 from app.domain.states import Role
 from app.ui.event_bridge import EventBridge
-from app.ui.history_view import HistoryViewWidget
-from app.ui.jobs_view import JobsViewWidget
-from app.ui.printer_view import PrinterViewWidget
+from app.ui.jobs_history_view import JobsHistoryViewWidget
 from app.ui.production_view import ProductionViewWidget
 from app.ui.settings_view import SettingsViewWidget
 
@@ -30,16 +28,14 @@ class MainWindow(QMainWindow):
 
         self.production_view = ProductionViewWidget(context, current_user)
         self.dashboard = self.production_view.dashboard
-        self.printer_view = PrinterViewWidget(context, Role(current_user.role))
-        self.jobs_view = JobsViewWidget(context)
-        self.history_view = HistoryViewWidget(context)
+        self.jobs_history_view = JobsHistoryViewWidget(context)
+        self.jobs_view = self.jobs_history_view.jobs_view
+        self.history_view = self.jobs_history_view.history_view
         self.settings_view = SettingsViewWidget(context, current_user)
 
         tabs = QTabWidget()
         tabs.addTab(self.production_view, "Production")
-        tabs.addTab(self.printer_view, "Printers")
-        tabs.addTab(self.jobs_view, "Jobs")
-        tabs.addTab(self.history_view, "History")
+        tabs.addTab(self.jobs_history_view, "Jobs & History")
         tabs.addTab(self.settings_view, "Settings")
         self.setCentralWidget(tabs)
 
