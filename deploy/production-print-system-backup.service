@@ -1,0 +1,14 @@
+# One-shot backup unit (Section 82), triggered by the paired .timer.
+# Install both to /etc/systemd/system/, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now production-print-system-backup.timer
+
+[Unit]
+Description=Back up the production print system database
+
+[Service]
+Type=oneshot
+User=printsystem
+Group=printsystem
+WorkingDirectory=/opt/production-print-system
+ExecStart=/opt/production-print-system/.venv/bin/python -m app.database.backup

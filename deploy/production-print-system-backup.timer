@@ -1,0 +1,12 @@
+# Daily backup (Section 82 minimum). Tighten OnCalendar= for more frequent
+# backups if the factory wants a smaller RPO than 24 hours.
+
+[Unit]
+Description=Daily backup of the production print system database
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

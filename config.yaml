@@ -1,0 +1,88 @@
+# Industrial Automated Printing System - local configuration
+# See Section 63 of industrial_printing_system_full_plan.md.
+# Do not put secrets here. API tokens are read from the environment variable
+# named by api.token_env_var.
+
+application:
+  name: "Industrial Automated Printing System"
+  environment: "production"
+
+api:
+  # "local": durable, idempotent serial/job allocation backed by our own
+  #   database (app/api/serial_api.py LocalSerialApiClient). No external
+  #   endpoint exists yet, so this is the default until one is supplied.
+  # "remote": call a real HTTP endpoint at base_url following the contract
+  #   in Section 23 (POST /production/jobs with client_job_id for idempotency).
+  mode: "local"
+  base_url: "https://example.com/api"
+  token_env_var: "PRODUCTION_API_TOKEN"
+  timeout_seconds: 10
+  retry_count: 5
+  backoff_base_seconds: 1
+  backoff_max_seconds: 30
+
+database:
+  path: "./data/production.db"
+  backup_dir: "./backups"
+
+printing:
+  max_retries: 3
+  queue_size: 100
+  serial_buffer_size: 100
+  retryable_errors:
+    - TIMEOUT
+    - CONNECTION_RESET
+    - TEMPORARY_BUSY
+  manual_recovery_errors:
+    - MEDIA_OUT
+    - RIBBON_OUT
+    - HEAD_OPEN
+    - UNKNOWN_PRINT_RESULT
+  immediate_stop_errors:
+    - SERIAL_MISMATCH
+    - SAFETY_FAULT
+    - EMERGENCY_STOP
+
+printers:
+  - name: "ANSER-01"
+    type: "ANSER"
+    model: "ANSER X1"
+    address: "192.168.1.20"   # PLACEHOLDER - confirm real X1 IP
+    port: 502                  # Modbus TCP standard port
+    enabled: true
+    simulate: true              # flip to false once the real X1 is reachable
+    connect_timeout_seconds: 5
+    anser_modbus:
+      unit_id: 1
+      # PLACEHOLDER register addresses - MUST be confirmed against the
+      # ANSER-supplied Modbus register map before production use
+      # (Section 28.2 / Section 105 item 1).
+      serial_fifo_register: 40001
+      serial_register_length: 10
+      consumption_counter_register: 40101
+      status_register: 40102
+      test_print_coil: 1
+      poll_interval_seconds: 1
+
+  - name: "ZEBRA-01"
+    type: "ZEBRA"
+    model: "ZT230"
+    address: "192.168.1.30"   # PLACEHOLDER - confirm real printer IP
+    port: 9100
+    enabled: true
+    simulate: true              # flip to false once the real Zebra is reachable
+    connect_timeout_seconds: 5
+
+monitoring:
+  poll_interval_seconds: 1
+  status_poll_interval_seconds: 3
+
+logging:
+  directory: "./logs"
+  level: "INFO"
+  max_bytes: 10485760
+  backup_count: 10
+
+security:
+  bcrypt_rounds: 12
+  session_timeout_minutes: 60
