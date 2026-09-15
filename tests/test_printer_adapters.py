@@ -90,3 +90,36 @@ def test_discover_cups_printers_parses_usb_queue(monkeypatch):
 
     assert printers[0].name == "EPSON_LQ310"
     assert printers[0].uri.startswith("usb://EPSON/LQ-310")
+
+
+def test_discover_cups_printers_falls_back_to_system_queue_for_network_printers(monkeypatch):
+    monkeypatch.setattr("app.printers.discovery.shutil.which", lambda _: "/usr/bin/lpstat")
+
+    class PrimaryResult:
+        returncode = 1
+        stdout = ""
+        stderr = ""
+
+    class FallbackResult:
+        returncode = 0
+        stdout = (
+            "system default destination: WIFI_PRINTER\n"
+            "device for WIFI_PRINTER: ipp://192.168.1.42/ipp/printer\n"
+        )
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[1:3] == ["-p", "-v"]:
+            return PrimaryResult()
+        if args[1:3] == ["-s", "-v"]:
+            return FallbackResult()
+        return FallbackResult()
+
+    monkeypatch.setattr("app.printers.discovery.subprocess.run", fake_run)
+    printers = discover_cups_printers()
+
+    assert [args for args in calls if args[:2] == ["/usr/bin/lpstat", "-p"]] == [["/usr/bin/lpstat", "-p", "-v"]]
+    assert printers[0].name == "WIFI_PRINTER"
+    assert printers[0].uri.startswith("ipp://192.168.1.42")

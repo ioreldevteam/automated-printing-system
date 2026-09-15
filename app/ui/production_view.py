@@ -120,15 +120,23 @@ class ProductionViewWidget(QWidget):
             return text
         return f"{text[:3]}***{text[-3:]}"
 
+    def _available_printer_names(self) -> list[str]:
+        names = list(self.context.printer_manager.names())
+        for printer in self.context.discovered_printers or []:
+            if printer.name not in names:
+                names.append(printer.name)
+        return names
+
     def _default_printers(self) -> tuple[str | None, str | None]:
+        names = self._available_printer_names()
         anser = next(
-            (name for name in self.context.printer_manager.names()
-             if self.context.printer_manager.config_for(name).type == "ANSER"),
+            (name for name in names
+             if name in self.context.printer_manager.names() and self.context.printer_manager.config_for(name).type == "ANSER"),
             None,
         )
         label = next(
-            (name for name in self.context.printer_manager.names()
-             if self.context.printer_manager.config_for(name).type in ("ZEBRA", "CUPS")),
+            (name for name in names
+             if name in self.context.printer_manager.names() and self.context.printer_manager.config_for(name).type in ("ZEBRA", "CUPS")),
             None,
         )
         return anser, label
@@ -140,7 +148,7 @@ class ProductionViewWidget(QWidget):
             widget.deleteLater()
         self._printer_cards.clear()
 
-        printer_names = list(self.context.printer_manager.names())
+        printer_names = self._available_printer_names()
         for index, name in enumerate(printer_names):
             row, col = divmod(index, 4)
             card = QWidget()
@@ -151,6 +159,13 @@ class ProductionViewWidget(QWidget):
             title.setStyleSheet("font-weight: bold;")
             status_label = QLabel("Status: UNKNOWN")
             info_label = QLabel("Model: UNKNOWN")
+            if name in self.context.printer_manager.names():
+                cfg = self.context.printer_manager.config_for(name)
+                info_label.setText(f"Model: {cfg.model or 'unknown'}")
+            else:
+                detected = next((p for p in (self.context.discovered_printers or []) if p.name == name), None)
+                if detected is not None:
+                    info_label.setText(f"Source: {detected.source} | {detected.uri or 'USB'}")
             fault_label = QLabel("Fault: NONE")
             card_layout.addWidget(title)
             card_layout.addWidget(status_label)
@@ -268,7 +283,7 @@ class ProductionViewWidget(QWidget):
 
             printer_combo = QComboBox()
             printer_combo.addItem("Default printer", None)
-            for printer_name in self.context.printer_manager.names():
+            for printer_name in self._available_printer_names():
                 printer_combo.addItem(printer_name, printer_name)
             card_layout.addWidget(printer_combo)
 
