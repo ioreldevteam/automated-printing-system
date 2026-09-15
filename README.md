@@ -6,22 +6,59 @@ The system is designed around durable production state: every production unit, p
 
 ## Current Status
 
-This repository is at the initial project setup stage. The package layout and technical implementation plan are present, but the production controller, database schema, printer adapters, UI, and API integration still need to be implemented.
+The core system described in the plan is implemented: database schema, job/unit state machine, durable queue workers, recovery/reconciliation engine, serial allocation (local + pluggable remote API), Zebra ZPL/TCP printing, an ANSER X1 adapter over Modbus TCP, printer health monitoring, audit/production/printer logging, role-based authentication, and a PySide6 desktop UI (dashboard, production control, printers, jobs, history, settings, recovery/error/printer-test dialogs).
+
+Two things remain genuinely open, both hardware-dependent and called out in the plan itself (Section 105):
+
+- **ANSER X1 Modbus register map** -- `config.yaml`'s `printers[].anser_modbus` addresses are placeholders. Confirm the real register map with ANSER support, update those addresses, and flip `simulate: false` for the ANSER printer.
+- **Zebra printer IP/port** -- also a placeholder in `config.yaml`; flip `simulate: false` once real hardware is reachable.
+
+Until both are confirmed, run with `simulate: true` (the default) against `SimulationPrinter`, which supports injecting the failure modes in Section 77 for testing recovery behavior safely.
 
 The source of truth for the intended behavior is [industrial_printing_system_full_plan.md](industrial_printing_system_full_plan.md).
 
-## Planned Capabilities
+## Running
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m app.main
+```
+
+On first run this seeds a default `admin` / `admin` account (Section 64) -- you'll get a startup warning until it's changed via a real user-management flow. Add at least one product from the Settings tab before creating a production job; the product catalog starts empty (Section 15).
+
+Run the test suite (includes a full end-to-end recovery test per Section 79/80 using `SimulationPrinter`, and a headless UI smoke test):
+
+```bash
+python -m pytest
+```
+
+## Database Migrations
+
+`init_db()` creates any missing tables automatically (`Base.metadata.create_all`) so the app is usable standalone. Alembic is also wired up (`app/database/migrations/`) for evolving the schema later:
+
+```bash
+alembic revision --autogenerate -m "describe the change"
+alembic upgrade head
+```
+
+## Backups
+
+`python -m app.database.backup` takes a consistent online backup (Section 82) using SQLite's backup API, safe to run while the app is live. See `deploy/production-print-system-backup.timer` for a systemd timer that runs it daily.
+
+## Capabilities
 
 - Product and quantity selection
-- Idempotent serial-number allocation through a configurable API
+- Idempotent serial-number allocation (local by default; a real API can be plugged in via `api.mode: remote`)
 - SQLite-backed production jobs and unit-level recovery
-- ANSER X1 integration over Ethernet
+- ANSER X1 integration over Modbus TCP
 - Zebra ZPL printing over TCP
 - Durable print queues and background printer monitoring
 - Automatic pause on printer faults
-- Recovery from unknown print results and application restarts
+- Recovery from unknown print results and application restarts (Section 39/40/89)
 - Role-based access and audit logging
-- Production and printer history
+- Production and printer history/reports
 
 ## Repository Layout
 
@@ -47,37 +84,8 @@ requirements.txt Python dependencies
 
 ## Requirements
 
-- Linux desktop or industrial PC
-- Python 3.12 or newer
-- Access to the product/serial API when API allocation is required
-- ANSER X1 and Zebra printer network details for hardware integration
-
-The ANSER protocol specification or Modbus TCP register map is required before implementing the X1 network driver. The public user manual does not define the complete byte-level frame format.
-
-## Development Setup
-
-From the repository root:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-Once the application entry point and dependencies are implemented, start the desktop application with:
-
-```bash
-python -m app.main
-```
-
-Run the test suite with:
-
-```bash
-pytest
-```
-
-At the current setup stage these commands may have no runnable application or tests yet.
+- Linux desktop or industrial PC for production deployment (see `deploy/`); development works on any OS with Python 3.11+
+- ANSER X1 Modbus register map and Zebra printer network details before running against real hardware (see Current Status above)
 
 ## Configuration and Runtime Data
 
@@ -93,14 +101,9 @@ backups/    Database backups
 
 These paths are ignored by Git. Never commit API tokens, passwords, production databases, or printer credentials.
 
-## Implementation Order
+## Not Yet Implemented
 
-1. Confirm API, printer, sensor, and verification requirements.
-2. Build the SQLite schema and production/unit state machine.
-3. Implement recovery and reconciliation logic.
-4. Add mock printers and failure simulation.
-5. Integrate the serial API, Zebra printers, and ANSER X1.
-6. Add the production controller and monitoring services.
-7. Build the PySide6 UI, verification workflow, and deployment packaging.
+- Barcode/camera verification (Section 41, listed as Version 2 scope in Section 98)
+- Packaging into a PyInstaller executable and the full deployment install (Section 81/Milestone 10) -- the `deploy/` systemd units assume that step
 
 Physical safety systems, emergency stops, guarding, and PLC interlocks remain outside the Python application and must continue to be handled by the appropriate industrial controls.

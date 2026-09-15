@@ -1,0 +1,34 @@
+# systemd unit for the desktop application (Section 81). Install to
+# /etc/systemd/system/production-print-system.service on the target Linux
+# industrial PC, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now production-print-system.service
+#
+# Runs as a dedicated, non-root service account that has been granted access
+# to the printer device paths (e.g. /dev/ttyUSB0, /dev/ttyACM0) if serial
+# fallback is ever used; the default Ethernet/Modbus TCP path in this
+# implementation does not need device permissions.
+#
+# A desktop application needs a display; this assumes the industrial PC logs
+# into a graphical session automatically and DISPLAY/XAUTHORITY are set for
+# the service account. Adjust Environment= below to match the actual
+# session, or run under the display manager's autostart instead of systemd
+# if that fits the deployment better.
+
+[Unit]
+Description=Industrial Automated Printing System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=printsystem
+Group=printsystem
+WorkingDirectory=/opt/production-print-system
+Environment=DISPLAY=:0
+ExecStart=/opt/production-print-system/production-print-system
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
