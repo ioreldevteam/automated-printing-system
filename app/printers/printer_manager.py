@@ -7,6 +7,8 @@ from app.config.loader import PrinterConfig
 from app.domain.models import PrinterStatusInfo
 from app.printers.anser import AnserPrinter
 from app.printers.base import BasePrinter
+from app.printers.cups import CupsPrinter
+from app.printers.discovery import DiscoveredPrinter
 from app.printers.simulation import SimulationPrinter
 from app.printers.zebra import ZebraPrinter
 
@@ -17,6 +19,8 @@ def build_printer(cfg: PrinterConfig) -> BasePrinter:
     if cfg.type == "ZEBRA":
         return ZebraPrinter(name=cfg.name, address=cfg.address, port=cfg.port,
                              connect_timeout=cfg.connect_timeout_seconds)
+    if cfg.type == "CUPS":
+        return CupsPrinter(name=cfg.name, uri=cfg.address, connect_timeout=cfg.connect_timeout_seconds)
     if cfg.type == "ANSER":
         return AnserPrinter(name=cfg.name, address=cfg.address, port=cfg.port,
                              modbus_config=cfg.anser_modbus, connect_timeout=cfg.connect_timeout_seconds)
@@ -32,6 +36,15 @@ class PrinterManager:
         for cfg in printer_configs:
             if not cfg.enabled:
                 continue
+            self._printers[cfg.name] = build_printer(cfg)
+            self._configs[cfg.name] = cfg
+
+    def register_discovered(self, printers: list[DiscoveredPrinter]) -> None:
+        for printer in printers:
+            if printer.name in self._printers:
+                continue
+            cfg = PrinterConfig(name=printer.name, type="CUPS", model=printer.model,
+                                address=printer.uri, enabled=True)
             self._printers[cfg.name] = build_printer(cfg)
             self._configs[cfg.name] = cfg
 

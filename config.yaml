@@ -4,7 +4,7 @@
 # named by api.token_env_var.
 
 application:
-  name: "Production Print System"
+  name: "Industrial Automated Printing System"
   environment: "production"
 
 api:

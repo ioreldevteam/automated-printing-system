@@ -17,7 +17,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.yaml"
 
 
 class ApplicationConfig(BaseModel):
-    name: str = "Production Print System"
+    name: str = "Industrial Automated Printing System"
     environment: str = "production"
 
 

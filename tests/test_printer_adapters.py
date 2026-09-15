@@ -1,5 +1,7 @@
 import pytest
 
+from app.printers.discovery import discover_cups_printers
+
 from app.domain.models import LabelData
 from app.domain.states import PrinterStatus
 from app.printers.anser import _pack_serial_to_registers
@@ -71,3 +73,20 @@ def test_simulation_printer_failure_at_specific_call():
     with pytest.raises(PrinterError):
         printer.push_serial("SN3")
     assert printer.get_consumption_count() == 2
+
+
+def test_discover_cups_printers_parses_usb_queue(monkeypatch):
+    monkeypatch.setattr("app.printers.discovery.shutil.which", lambda _: "/usr/bin/lpstat")
+
+    class Result:
+        returncode = 0
+        stdout = (
+            "printer EPSON_LQ310 is idle. enabled since Tue 15 Sep 2026\n"
+            "device for EPSON_LQ310: usb://EPSON/LQ-310?serial=ABC123\n"
+        )
+
+    monkeypatch.setattr("app.printers.discovery.subprocess.run", lambda *args, **kwargs: Result())
+    printers = discover_cups_printers()
+
+    assert printers[0].name == "EPSON_LQ310"
+    assert printers[0].uri.startswith("usb://EPSON/LQ-310")

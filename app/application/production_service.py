@@ -16,7 +16,7 @@ import threading
 from typing import Optional
 
 from app.database.database import session_scope
-from app.database.repositories import JobRepository, ProductRepository, UnitRepository
+from app.database.repositories import JobRepository, ProductRepository, PrinterRepository, UnitRepository
 from app.domain.events import EventBus, EventType
 from app.domain.states import JobStatus, UnitStatus
 from app.printers.printer_manager import PrinterManager
@@ -55,20 +55,32 @@ class ProductionController:
         self.event_bus.emit(EventType.PRODUCTION_STARTED, job_id=job_id)
 
     def _start_workers(self, job_id: int) -> None:
+        with session_scope() as session:
+            job = JobRepository(session).get(job_id)
+            anser_name, zebra_name = self._assigned_printer_names(session, job)
         if self._anser_worker is None:
-            context = WorkerContext(job_id=job_id, printer_name=self.anser_printer_name,
+            context = WorkerContext(job_id=job_id, printer_name=anser_name,
                                      max_retries=self.max_retries)
             self._anser_worker = AnserWorker(context, self.printer_manager, self.event_bus,
                                               self._pause_job, self._is_job_running)
             self._anser_worker.start()
         if self._zebra_worker is None:
-            context = WorkerContext(job_id=job_id, printer_name=self.zebra_printer_name,
+            context = WorkerContext(job_id=job_id, printer_name=zebra_name,
                                      max_retries=self.max_retries)
             self._zebra_worker = ZebraWorker(context, self.printer_manager, self.event_bus,
                                               self._pause_job, self._is_job_running,
                                               template_path=self.zebra_template_path,
                                               verification_required=self.verification_required)
             self._zebra_worker.start()
+
+    def _assigned_printer_names(self, session, job):
+        if job is None:
+            return self.anser_printer_name, self.zebra_printer_name
+        printers = PrinterRepository(session)
+        anser = printers.get(job.anser_printer_id) if job.anser_printer_id else None
+        zebra = printers.get(job.zebra_printer_id) if job.zebra_printer_id else None
+        return (anser.name if anser else self.anser_printer_name,
+                zebra.name if zebra else self.zebra_printer_name)
 
     def pause_job(self, job_id: int, user_id: int | None) -> None:
         with session_scope() as session:
