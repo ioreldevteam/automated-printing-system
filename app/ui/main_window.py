@@ -12,7 +12,6 @@ from app.application.recovery_service import RecoveryService
 from app.database.database import session_scope
 from app.database.models import User
 from app.domain.states import Role
-from app.ui.dashboard import DashboardWidget
 from app.ui.event_bridge import EventBridge
 from app.ui.history_view import HistoryViewWidget
 from app.ui.jobs_view import JobsViewWidget
@@ -29,16 +28,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{context.config.application.name} - {current_user.username} ({current_user.role})")
         self.resize(1000, 700)
 
-        self.dashboard = DashboardWidget(context)
         self.production_view = ProductionViewWidget(context, current_user)
-        self.production_view.job_started.connect(self.dashboard.set_active_job)
+        self.dashboard = self.production_view.dashboard
         self.printer_view = PrinterViewWidget(context, Role(current_user.role))
         self.jobs_view = JobsViewWidget(context)
         self.history_view = HistoryViewWidget(context)
         self.settings_view = SettingsViewWidget(context, current_user)
 
         tabs = QTabWidget()
-        tabs.addTab(self.dashboard, "Dashboard")
         tabs.addTab(self.production_view, "Production")
         tabs.addTab(self.printer_view, "Printers")
         tabs.addTab(self.jobs_view, "Jobs")

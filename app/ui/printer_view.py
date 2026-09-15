@@ -33,6 +33,19 @@ class PrinterViewWidget(QWidget):
             self.cards[name] = {
                 "status": status_label, "connection": connection_label, "fault": fault_label,
             }
+        configured_names = set(context.printer_manager.names())
+        for row, printer in enumerate(context.discovered_printers or [], start=len(self.cards)):
+            if printer.name in configured_names:
+                continue
+            details = printer.uri or "No device URI"
+            name_label = QLabel(f"{printer.name} (Detected - {printer.model or 'unknown model'})")
+            status_label = QLabel("Status: DETECTED")
+            connection_label = QLabel(f"Source: {printer.source} | {details}")
+            fault_label = QLabel("Configuration: REQUIRED for production")
+            grid.addWidget(name_label, row, 0)
+            grid.addWidget(status_label, row, 1)
+            grid.addWidget(connection_label, row, 2)
+            grid.addWidget(fault_label, row, 3)
         layout.addWidget(grid_box)
 
         if role_can(user_role, "test_printer"):
