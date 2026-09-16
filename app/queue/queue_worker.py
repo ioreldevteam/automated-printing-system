@@ -119,12 +119,24 @@ class AnserWorker(BaseQueueWorker):
         self.event_bus.emit(EventType.UNIT_PRINT_STARTED, unit_id=unit_id, serial=serial_number, stage="ANSER")
 
         # Phase 2: the actual printer I/O, outside any open transaction.
-        printer = self.printer_manager.get(self.context.printer_name)
         try:
+            printer = self.printer_manager.get(self.context.printer_name)
             printer.push_serial(serial_number)
             error: PrinterError | None = None
         except PrinterError as exc:
             error = exc
+        except KeyError:
+            # The printer this job is assigned to isn't registered with the
+            # printer manager (never configured, or a discovered printer
+            # that disappeared/was never connected). Without this, the
+            # exception was only caught by the generic `except Exception` in
+            # run(), which logs it and silently retries forever: the unit
+            # stays stuck in ANSER_PRINTING (already committed in Phase 1)
+            # and nothing is ever recorded or surfaced to the operator.
+            error = PrinterError(
+                f"Printer '{self.context.printer_name}' is not configured/connected",
+                error_code="PRINTER_001",
+            )
 
         # Phase 3: record the result (short transaction).
         pause_info: tuple[int, str, str] | None = None
@@ -199,12 +211,21 @@ class ZebraWorker(BaseQueueWorker):
         self.event_bus.emit(EventType.UNIT_PRINT_STARTED, unit_id=unit_id, serial=serial_number, stage="ZEBRA")
 
         # Phase 2: the actual printer I/O, outside any open transaction.
-        printer = self.printer_manager.get(self.context.printer_name)
         try:
+            printer = self.printer_manager.get(self.context.printer_name)
             printer.print_label(self._template(), label)
             error: PrinterError | None = None
         except PrinterError as exc:
             error = exc
+        except KeyError:
+            # See AnserWorker.process_once: an unregistered printer name
+            # must not fall through to the generic exception handler in
+            # run(), or the unit stays stuck mid-print forever with no
+            # error ever recorded and nothing visible to the operator.
+            error = PrinterError(
+                f"Printer '{self.context.printer_name}' is not configured/connected",
+                error_code="PRINTER_001",
+            )
 
         # Phase 3: record the result (short transaction).
         pause_info: tuple[int, str, str] | None = None

@@ -19,6 +19,7 @@ from app.database.database import session_scope
 from app.database.repositories import JobRepository, ProductRepository, PrinterRepository, UnitRepository
 from app.domain.events import EventBus, EventType
 from app.domain.states import JobStatus, UnitStatus
+from app.printers.base import PrinterError
 from app.printers.printer_manager import PrinterManager
 from app.queue.queue_worker import AnserWorker, WorkerContext, ZebraWorker, _resume_target_for_retry
 
@@ -82,6 +83,19 @@ class ProductionController:
         return (anser.name if anser else self.anser_printer_name,
                 zebra.name if zebra else self.zebra_printer_name)
 
+    def resolve_zebra_printer_name(self, job_id: int | None) -> str:
+        """The label printer actually assigned to this job right now, for
+        UI surfaces (e.g. the Recovery dialog's TEST PRINTER button) that
+        must not fall back to the static config default -- otherwise they'd
+        test/report on the wrong printer whenever a job was started against
+        an operator-selected printer instead of the default one."""
+        if job_id is None:
+            return self.zebra_printer_name
+        with session_scope() as session:
+            job = JobRepository(session).get(job_id)
+            _, zebra_name = self._assigned_printer_names(session, job)
+            return zebra_name
+
     def pause_job(self, job_id: int, user_id: int | None) -> None:
         with session_scope() as session:
             jobs = JobRepository(session)
@@ -116,7 +130,29 @@ class ProductionController:
             if job is not None:
                 from app.application.job_service import JobService
                 JobService(session).stop_job(job, user_id)
+        # Whatever labels made it into the buffer before the operator
+        # stopped the job should still come out -- otherwise a stop would
+        # silently swallow already-completed units' labels.
+        self._flush_label_printer(job_id)
         self.event_bus.emit(EventType.PRODUCTION_STOPPED, job_id=job_id)
+
+    def _flush_label_printer(self, job_id: int) -> None:
+        """Send everything buffered by the job's label printer as one print
+        job. Only Windows/CUPS-style adapters buffer at all (see
+        BasePrinter.flush_batch) -- ANSER/Zebra/Simulation print immediately
+        and this is a no-op for them."""
+        zebra_name = self.resolve_zebra_printer_name(job_id)
+        try:
+            printer = self.printer_manager.get(zebra_name)
+        except KeyError:
+            return
+        if not printer.supports_batch_printing():
+            return
+        try:
+            printer.flush_batch()
+        except PrinterError as exc:
+            logger.warning("Failed to flush batched print job for %s: %s", zebra_name, exc)
+            self._pause_job(job_id, exc.error_code, str(exc))
 
     def _stop_workers(self) -> None:
         if self._anser_worker is not None:
@@ -162,6 +198,11 @@ class ProductionController:
                 return
             from app.application.job_service import JobService
             JobService(session).complete_job(job, None)
+        # The full requested quantity is done -- if the assigned label
+        # printer is a Windows/CUPS adapter, this is the one point where all
+        # of that quantity's labels actually go to the printer, as a single
+        # print job/one operator approval instead of one per label.
+        self._flush_label_printer(job_id)
         with self._lock:
             if self._active_job_id == job_id:
                 self._stop_workers()

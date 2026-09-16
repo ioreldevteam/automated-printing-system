@@ -34,8 +34,14 @@ class LabelData:
             "PRODUCT_NAME": self.product_name,
             "SERIAL_NUMBER": self.serial_number,
             "BATCH_NUMBER": self.batch_number,
+            "BATCH_CODE": self.batch_number or "BATCH-001",
             "DATE": self.date,
             "EXPIRY_DATE": self.expiry_date,
+            "RETAIL_BARCODE": self.extra.get("retail_barcode", "8901234567890"),
+            "MRP_VALUE": self.extra.get("mrp_value", "450.00"),
+            "RATED_SPECS": self.extra.get("rated_specs", "10 AX / 250 V~"),
+            "ITEM_CODE": self.extra.get("item_code", "101-1001"),
+            "SLS_CODE": self.extra.get("sls_code", "141"),
         }
         merged.update(self.extra)
         return merged

@@ -10,6 +10,7 @@ from app.printers.base import BasePrinter
 from app.printers.cups import CupsPrinter
 from app.printers.discovery import DiscoveredPrinter
 from app.printers.simulation import SimulationPrinter
+from app.printers.windows import WindowsPrinter
 from app.printers.zebra import ZebraPrinter
 
 
@@ -21,6 +22,8 @@ def build_printer(cfg: PrinterConfig) -> BasePrinter:
                              connect_timeout=cfg.connect_timeout_seconds)
     if cfg.type == "CUPS":
         return CupsPrinter(name=cfg.name, uri=cfg.address, connect_timeout=cfg.connect_timeout_seconds)
+    if cfg.type == "WINDOWS":
+        return WindowsPrinter(name=cfg.name, port_name=cfg.address, connect_timeout=cfg.connect_timeout_seconds)
     if cfg.type == "ANSER":
         return AnserPrinter(name=cfg.name, address=cfg.address, port=cfg.port,
                              modbus_config=cfg.anser_modbus, connect_timeout=cfg.connect_timeout_seconds)
@@ -39,14 +42,22 @@ class PrinterManager:
             self._printers[cfg.name] = build_printer(cfg)
             self._configs[cfg.name] = cfg
 
-    def register_discovered(self, printers: list[DiscoveredPrinter]) -> None:
+    def register_discovered(self, printers: list[DiscoveredPrinter]) -> list[str]:
+        """Add newly detected printers that aren't already known (configured
+        or previously discovered). Returns the names actually added, so
+        callers can sync/connect only the new ones instead of redoing work
+        for every printer on every rescan."""
+        added: list[str] = []
         for printer in printers:
             if printer.name in self._printers:
                 continue
-            cfg = PrinterConfig(name=printer.name, type="CUPS", model=printer.model,
+            adapter_type = "WINDOWS" if printer.source == "WINDOWS" else "CUPS"
+            cfg = PrinterConfig(name=printer.name, type=adapter_type, model=printer.model,
                                 address=printer.uri, enabled=True)
             self._printers[cfg.name] = build_printer(cfg)
             self._configs[cfg.name] = cfg
+            added.append(cfg.name)
+        return added
 
     def get(self, name: str) -> BasePrinter:
         if name not in self._printers:

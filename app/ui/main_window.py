@@ -1,5 +1,5 @@
 """Main application window (Section 8/9): tab navigation across the
-dashboard, production control, printers, job history, and settings. Wires
+dashboard, production control, job history, and settings. Wires
 EventBus notifications (via EventBridge) to recovery/error dialogs.
 """
 from __future__ import annotations
@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self.jobs_view = self.jobs_history_view.jobs_view
         self.history_view = self.jobs_history_view.history_view
         self.settings_view = SettingsViewWidget(context, current_user)
+        self.printer_view = self.settings_view.printer_view
 
         tabs = QTabWidget()
         tabs.addTab(self.production_view, "Production")
@@ -57,7 +58,7 @@ class MainWindow(QMainWindow):
             summary = RecoveryService(session, self.context.printer_manager).build_summary(job_id)
 
         dialog = RecoveryDialog(summary, self.context.printer_monitor.printer_service,
-                                 self.context.production_controller.zebra_printer_name, self)
+                                 self.context.production_controller.resolve_zebra_printer_name(job_id), self)
         dialog.exec()
         if dialog.decision == "resume":
             self.context.production_controller.resume_job(job_id, self.current_user.id)

@@ -57,7 +57,8 @@ class SettingsViewWidget(QWidget):
 
         printers_box = QGroupBox("Printers")
         printers_layout = QVBoxLayout(printers_box)
-        printers_layout.addWidget(PrinterViewWidget(context, Role(current_user.role)))
+        self.printer_view = PrinterViewWidget(context, Role(current_user.role))
+        printers_layout.addWidget(self.printer_view)
         layout.addWidget(printers_box)
 
         retry_box = QGroupBox("Retry Policy")

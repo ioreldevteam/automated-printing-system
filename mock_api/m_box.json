@@ -1,0 +1,23 @@
+[
+  {
+    "serial_code": "M-BOX-1011001-001",
+    "no_of_quantity": 100,
+    "barcode": "8901234567890-M100",
+    "item_code": "101-1001",
+    "item_name": "Orel LED Bulb 9W Cool Daylight"
+  },
+  {
+    "serial_code": "M-BOX-1022001-001",
+    "no_of_quantity": 100,
+    "barcode": "8901234567891-M100",
+    "item_code": "102-2001",
+    "item_name": "Orel 1-Gang 1-Way Switch 10A"
+  },
+  {
+    "serial_code": "M-BOX-1033001-001",
+    "no_of_quantity": 100,
+    "barcode": "8901234567892-M100",
+    "item_code": "103-3001",
+    "item_name": "Orel 13A Switched Socket Outlet"
+  }
+]

@@ -4,11 +4,16 @@ show the generated box-by-box production sections for the active job.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -26,9 +31,10 @@ from app.application.job_service import JobService
 from app.application.serial_service import SerialService
 from app.database.database import session_scope
 from app.database.models import User
-from app.database.repositories import JobRepository, PrinterRepository, ProductRepository
+from app.database.repositories import JobRepository, PrinterRepository, ProductRepository, UnitRepository
 from app.domain.exceptions import ProductionError
 from app.domain.states import Role, role_can
+from app.templates.label_designer import render_label_qimage
 from app.ui.dashboard import DashboardWidget
 
 
@@ -88,10 +94,23 @@ class ProductionViewWidget(QWidget):
         self.sections_box.hide()
         layout.addWidget(self.sections_box)
 
+        self.actions_widget = QWidget()
+        start_row = QHBoxLayout(self.actions_widget)
+        start_row.setContentsMargins(0, 0, 0, 0)
+        self.cancel_button = QPushButton("CANCEL")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setStyleSheet("background-color: #b91c1c; color: white;")
+        self.cancel_button.clicked.connect(self._cancel_job)
+        start_row.addWidget(self.cancel_button)
+
         self.start_button = QPushButton("START")
         self.start_button.setEnabled(False)
         self.start_button.clicked.connect(self._start_job)
-        layout.addWidget(self.start_button)
+        start_row.addWidget(self.start_button)
+        self.cancel_button.hide()
+        self.start_button.hide()
+        self.actions_widget.hide()
+        layout.addWidget(self.actions_widget)
 
         self.printer_box = QGroupBox("Printer Section")
         self.printer_grid = QGridLayout(self.printer_box)
@@ -127,6 +146,18 @@ class ProductionViewWidget(QWidget):
                 names.append(printer.name)
         return names
 
+    def _label_printer_names(self) -> list[str]:
+        """Printers that can take a label/box print job -- i.e. every known
+        printer except the ANSER serializer, which speaks a different
+        (FIFO push) protocol and is never a valid target for the per-box
+        printer picker."""
+        names = self._available_printer_names()
+        return [
+            name for name in names
+            if not (name in self.context.printer_manager.names()
+                    and self.context.printer_manager.config_for(name).type == "ANSER")
+        ]
+
     def _default_printers(self) -> tuple[str | None, str | None]:
         names = self._available_printer_names()
         anser = next(
@@ -136,7 +167,8 @@ class ProductionViewWidget(QWidget):
         )
         label = next(
             (name for name in names
-             if name in self.context.printer_manager.names() and self.context.printer_manager.config_for(name).type in ("ZEBRA", "CUPS")),
+             if name in self.context.printer_manager.names()
+             and self.context.printer_manager.config_for(name).type in ("ZEBRA", "CUPS", "WINDOWS")),
             None,
         )
         return anser, label
@@ -173,11 +205,13 @@ class ProductionViewWidget(QWidget):
             card_layout.addWidget(fault_label)
 
             buttons = QHBoxLayout()
+            action_buttons: dict[str, QPushButton] = {}
             for action in ("Pause", "Resume", "Stop"):
                 button = QPushButton(action)
                 button.setEnabled(False)
                 button.clicked.connect(lambda _checked=False, action=action, printer=name: self._printer_action(printer, action))
                 buttons.addWidget(button)
+                action_buttons[action] = button
             card_layout.addLayout(buttons)
             card.setEnabled(False)
 
@@ -187,6 +221,7 @@ class ProductionViewWidget(QWidget):
                 "info": info_label,
                 "fault": fault_label,
                 "buttons": buttons,
+                "action_buttons": action_buttons,
             }
             self.printer_grid.addWidget(card, row, col)
 
@@ -210,7 +245,16 @@ class ProductionViewWidget(QWidget):
 
             active = self.active_job_id is not None and name in selected_printers
             card["widget"].setEnabled(active)
-            for button in card["buttons"].parent().findChildren(QPushButton):
+            # Enable the buttons directly instead of trying to re-discover
+            # them via the layout: `buttons.parent()` is the QHBoxLayout
+            # itself (Qt reparents a nested layout to its parent layout when
+            # you addLayout() it), and the QPushButtons added to it via
+            # addWidget() are never reparented onto that layout object --
+            # they become children of the card widget instead. So
+            # `card["buttons"].parent().findChildren(QPushButton)` always
+            # returned an empty list and these buttons stayed disabled
+            # forever, no matter what state the job was in.
+            for button in card["action_buttons"].values():
                 button.setEnabled(active)
 
     def _printer_action(self, printer_name: str, action: str) -> None:
@@ -226,13 +270,62 @@ class ProductionViewWidget(QWidget):
             self.context.production_controller.stop_job(self.active_job_id, self.current_user.id)
             self.status_label.setText(f"Printer {printer_name} stopped.")
             self.start_button.setEnabled(False)
+            self.cancel_button.setEnabled(False)
+            self.cancel_button.hide()
+            self.start_button.hide()
+            self.actions_widget.hide()
             self.active_job_id = None
             self.sections_box.hide()
             self.form_box.show()
             self.new_job_button.hide()
             self._refresh_printer_cards()
 
-    def _create_section_cards(self, job_number: str, product_name: str, quantity: int) -> None:
+    def _get_label_specs(self, product_code: str, product_name: str, job_number: str, serial_number: str) -> dict:
+        item_c = product_code or "101-1001"
+        specs = {
+            "item_code": item_c,
+            "product_name": product_name or "1 Gang 1 Way Switch Indicator",
+            "batch_code": f"BATCH-{job_number}" if job_number else "BATCH-001",
+            "serial_number": serial_number or f"SN{item_c.replace('-', '')}-0001",
+            "retail_barcode": "8901234567890",
+            "mrp_value": "450.00",
+            "rated_specs": "10 AX / 250 V~",
+            "sls_code": "141",
+        }
+        mock_file = Path(__file__).resolve().parents[2] / "mock_api" / "product_data.json"
+        if mock_file.exists():
+            try:
+                with open(mock_file, "r", encoding="utf-8") as f:
+                    catalog = json.load(f)
+                for item in catalog:
+                    if item.get("item_code") == item_c:
+                        if item.get("retail_barcode"):
+                            specs["retail_barcode"] = str(item["retail_barcode"])
+                        if item.get("mrp_value"):
+                            specs["mrp_value"] = str(item["mrp_value"])
+                        break
+            except Exception:
+                pass
+        return specs
+
+    def _show_full_label_dialog(self, specs: dict) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Unit Box Label - {specs.get('item_code', '')}")
+        d_layout = QVBoxLayout(dialog)
+
+        img = render_label_qimage(specs, width=600, height=240)
+        lbl = QLabel()
+        lbl.setPixmap(QPixmap.fromImage(img))
+        lbl.setStyleSheet("border: 2px solid #333; background: white;")
+        d_layout.addWidget(lbl)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btn_box.rejected.connect(dialog.reject)
+        d_layout.addWidget(btn_box)
+        dialog.exec()
+
+    def _create_section_cards(self, job_number: str, product_name: str, quantity: int,
+                              product_code: str = "", first_serial: str = "", last_serial: str = "") -> None:
         for value in list(self._box_cards.values()):
             value["container"].deleteLater()
         self._box_cards.clear()
@@ -244,6 +337,10 @@ class ProductionViewWidget(QWidget):
             elif item.layout() is not None:
                 self._clear_layout(item.layout())
 
+        clean_code = (product_code or "101-1001").replace("-", "")
+        start_sn = first_serial or f"SN{clean_code}-0001"
+        end_sn = last_serial or f"SN{clean_code}-{quantity:04d}"
+
         section_grid = QGridLayout()
         section_order = ["UNIT", "B", "M"]
         for index, label in enumerate(section_order):
@@ -251,7 +348,7 @@ class ProductionViewWidget(QWidget):
             card_layout = QVBoxLayout(card)
             header = QHBoxLayout()
             header_label = QLabel(f"{label} Box")
-            header_label.setStyleSheet("font-weight: bold;")
+            header_label.setStyleSheet("font-weight: bold; font-size: 13px;")
             select_toggle = QPushButton("Selected")
             select_toggle.setCheckable(True)
             select_toggle.setChecked(True)
@@ -263,8 +360,8 @@ class ProductionViewWidget(QWidget):
             card_layout.addLayout(header)
 
             details = QFormLayout()
-            serial_start = f"{job_number[:3]}{index + 1:03d}***{quantity:05d}"
-            serial_end = f"{job_number[:3]}{index + 1 + 5:03d}***{quantity:05d}"
+            serial_start = start_sn if label == "UNIT" else f"B-BOX-{clean_code}-001" if label == "B" else f"M-BOX-{clean_code}-001"
+            serial_end = end_sn if label == "UNIT" else f"B-BOX-{clean_code}-{max(1, quantity // 10):03d}" if label == "B" else f"M-BOX-{clean_code}-{max(1, quantity // 100):03d}"
             details.addRow("Start Serial", QLabel(self._mask_serial(serial_start)))
             details.addRow("End Serial", QLabel(self._mask_serial(serial_end)))
             details.addRow("POS Code", QLabel(f"POS-{index + 1:02d}"))
@@ -272,18 +369,54 @@ class ProductionViewWidget(QWidget):
             details.addRow("Item Description", QLabel(product_name))
             details.addRow("Batch Code", QLabel(f"BATCH-{job_number}"))
 
-            right_panel = QWidget()
-            right_layout = QVBoxLayout(right_panel)
-            right_layout.addWidget(QLabel("Label"))
-            right_layout.addWidget(QLabel(f"{product_name}\n{job_number}"))
-            preview = QHBoxLayout()
-            preview.addLayout(details)
-            preview.addWidget(right_panel)
-            card_layout.addLayout(preview)
+            if label == "UNIT":
+                unit_preview_container = QWidget()
+                unit_preview_layout = QVBoxLayout(unit_preview_container)
+                unit_preview_layout.setContentsMargins(4, 4, 4, 4)
+
+                preview_title = QLabel("<b>Unit Box Label Preview</b>")
+                preview_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                unit_preview_layout.addWidget(preview_title)
+
+                label_specs = self._get_label_specs(product_code, product_name, job_number, start_sn)
+                unit_img = render_label_qimage(label_specs, width=600, height=240)
+
+                unit_img_label = QLabel()
+                unit_img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                unit_pixmap = QPixmap.fromImage(unit_img).scaled(
+                    230, 92, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                )
+                unit_img_label.setPixmap(unit_pixmap)
+                unit_img_label.setStyleSheet(
+                    "border: 1px solid #0284c7; background-color: #ffffff; border-radius: 4px; padding: 2px;"
+                )
+                unit_img_label.setCursor(Qt.CursorShape.PointingHandCursor)
+                unit_img_label.setToolTip("Click to enlarge Unit Box label")
+                unit_img_label.mousePressEvent = lambda event, s=label_specs: self._show_full_label_dialog(s)
+                unit_preview_layout.addWidget(unit_img_label)
+
+                enlarge_btn = QPushButton("🔍 Enlarge Label")
+                enlarge_btn.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+                enlarge_btn.clicked.connect(lambda _=False, s=label_specs: self._show_full_label_dialog(s))
+                unit_preview_layout.addWidget(enlarge_btn)
+
+                preview = QHBoxLayout()
+                preview.addLayout(details)
+                preview.addWidget(unit_preview_container)
+                card_layout.addLayout(preview)
+            else:
+                right_panel = QWidget()
+                right_layout = QVBoxLayout(right_panel)
+                right_layout.addWidget(QLabel(f"<b>{label}-Box Label</b>"))
+                right_layout.addWidget(QLabel(f"{product_name}\nBATCH-{job_number}"))
+                preview = QHBoxLayout()
+                preview.addLayout(details)
+                preview.addWidget(right_panel)
+                card_layout.addLayout(preview)
 
             printer_combo = QComboBox()
             printer_combo.addItem("Default printer", None)
-            for printer_name in self._available_printer_names():
+            for printer_name in self._label_printer_names():
                 printer_combo.addItem(printer_name, printer_name)
             card_layout.addWidget(printer_combo)
 
@@ -341,6 +474,9 @@ class ProductionViewWidget(QWidget):
                 job_service.mark_ready(job, self.current_user.id)
                 self.active_job_id = job.id
                 job_number = job.job_number
+                units = UnitRepository(session).list_for_job(job.id)
+                first_serial = units[0].serial_number if units else ""
+                last_serial = units[-1].serial_number if units else ""
         except ProductionError as exc:
             QMessageBox.critical(self, "Cannot create job", str(exc))
             return
@@ -352,9 +488,20 @@ class ProductionViewWidget(QWidget):
         self.preview_count.setText(str(quantity))
         self.preview_box.show()
         self.new_job_button.show()
-        self._create_section_cards(job_number, product_name, quantity)
+        self._create_section_cards(
+            job_number,
+            product_name,
+            quantity,
+            product_code=product_code,
+            first_serial=first_serial,
+            last_serial=last_serial,
+        )
         self.status_label.setText(f"Job {job_number} ready.")
+        self.actions_widget.show()
+        self.start_button.show()
+        self.cancel_button.show()
         self.start_button.setEnabled(role_can(Role(self.current_user.role), "start_job"))
+        self.cancel_button.setEnabled(role_can(Role(self.current_user.role), "cancel_job"))
         self.job_started.emit(self.active_job_id)
         self.dashboard.set_active_job(self.active_job_id)
         self._refresh_printer_cards()
@@ -375,12 +522,46 @@ class ProductionViewWidget(QWidget):
             self.status_label.show()
             return
 
+        # The queue only runs a single Zebra/label worker per job, so every
+        # active box has to agree on one physical printer -- otherwise we'd
+        # have to silently pick one and the operator's choice for the other
+        # boxes would be ignored.
+        distinct_printers = set(selected_printers)
+        if len(distinct_printers) > 1:
+            self.status_label.setText(
+                "Select the same printer for every active box before starting "
+                "(a job currently prints to one label printer at a time)."
+            )
+            self.status_label.show()
+            return
+
+        chosen_printer_name = next(iter(distinct_printers))
+
         with session_scope() as session:
             job = JobRepository(session).get(self.active_job_id)
+            chosen_printer = PrinterRepository(session).get_by_name(chosen_printer_name)
+            if chosen_printer is None:
+                self.status_label.setText(
+                    f"Printer '{chosen_printer_name}' isn't registered yet -- rescan printers and try again."
+                )
+                self.status_label.show()
+                return
+            # This is the actual fix: apply the operator's chosen printer to
+            # the job so the queue worker targets it. Previously the
+            # selection made here was only used to enable/highlight printer
+            # cards and was never written back to the job, so the job kept
+            # printing to whatever default printer was assigned at
+            # Create-Job time (e.g. a simulated printer), no matter what was
+            # picked here.
+            job.zebra_printer_id = chosen_printer.id
             JobService(session).start_job(job, self.current_user.id)
         self.context.production_controller.start_job(self.active_job_id)
-        self.status_label.setText("Production running.")
+        self.status_label.setText(f"Production running on {chosen_printer_name}.")
         self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.hide()
+        self.start_button.hide()
+        self.actions_widget.hide()
         self._refresh_printer_cards()
 
     def _pause_job(self) -> None:
@@ -399,9 +580,54 @@ class ProductionViewWidget(QWidget):
         self.new_job_button.hide()
         self.form_box.show()
         self.sections_box.hide()
+        self.preview_box.hide()
         self.active_job_id = None
         self.status_label.setText("No active job.")
         self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.hide()
+        self.start_button.hide()
+        self.actions_widget.hide()
+
+    def _cancel_job(self) -> None:
+        if self.active_job_id is None:
+            return
+        if not role_can(Role(self.current_user.role), "cancel_job"):
+            QMessageBox.warning(self, "Not allowed", "Your role cannot cancel jobs.")
+            return
+        confirm = QMessageBox.question(
+            self, "Cancel job",
+            "Cancel this job before it prints? It will be recorded as CANCELLED in job history.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        job_id = self.active_job_id
+        try:
+            with session_scope() as session:
+                job = JobRepository(session).get(job_id)
+                if job is None:
+                    return
+                JobService(session).cancel_job(job, self.current_user.id)
+                job_number = job.job_number
+        except ProductionError as exc:
+            QMessageBox.critical(self, "Cannot cancel job", str(exc))
+            return
+
+        self.status_label.setText(f"Job {job_number} cancelled.")
+        self.active_job_id = None
+        self.sections_box.hide()
+        self.preview_box.hide()
+        self.form_box.show()
+        self.new_job_button.hide()
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.hide()
+        self.start_button.hide()
+        self.actions_widget.hide()
+        self.dashboard.set_active_job(None)
+        self._refresh_printer_cards()
 
     def _stop_job(self) -> None:
         if self.active_job_id is None:
@@ -409,8 +635,13 @@ class ProductionViewWidget(QWidget):
         self.context.production_controller.stop_job(self.active_job_id, self.current_user.id)
         self.status_label.setText("Production stopped.")
         self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.hide()
+        self.start_button.hide()
+        self.actions_widget.hide()
         self.active_job_id = None
         self.sections_box.hide()
+        self.preview_box.hide()
         self.form_box.show()
         self.new_job_button.hide()
         self._refresh_printer_cards()
