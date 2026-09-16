@@ -8,12 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.loader import AppConfig
+from app.database.database import session_scope
 from app.database.models import User
 from app.domain.events import EventBus
 from app.monitoring.printer_monitor import PrinterMonitor
+from app.application.printer_service import PrinterService
 from app.application.production_service import ProductionController
 from app.printers.printer_manager import PrinterManager
-from app.printers.discovery import DiscoveredPrinter, discover_cups_printers
+from app.printers.discovery import DiscoveredPrinter, discover_printers
 
 ZEBRA_TEMPLATE_PATH = str(
     Path(__file__).resolve().parents[2] / "app" / "templates" / "zpl" / "sticker_label_v1.zpl"
@@ -35,7 +37,7 @@ def build_app_context(config: AppConfig) -> AppContext:
     event_bus = EventBus()
     printer_manager = PrinterManager()
     printer_manager.load_from_config(config.printers)
-    discovered_printers = discover_cups_printers()
+    discovered_printers = discover_printers()
     printer_manager.register_discovered(discovered_printers)
 
     anser_cfg = next((p for p in config.printers if p.type == "ANSER"), None)
@@ -57,3 +59,28 @@ def build_app_context(config: AppConfig) -> AppContext:
         production_controller=production_controller, printer_monitor=printer_monitor,
         discovered_printers=discovered_printers,
     )
+
+
+def rescan_discovered_printers(context: AppContext) -> list[str]:
+    """Re-run host printer discovery (CUPS/USB/network) and hot-register any
+    printer that has appeared since startup or the last rescan -- e.g. a USB
+    label printer plugged in after the app was launched. Safe to call
+    repeatedly (from a UI button or a background timer): printers already
+    known, configured or previously discovered, are left untouched.
+
+    Returns the names of newly added printers, if any.
+    """
+    discovered = discover_printers()
+    context.discovered_printers = discovered
+    newly_added = context.printer_manager.register_discovered(discovered)
+
+    if newly_added:
+        with session_scope() as session:
+            PrinterService(context.printer_manager).sync_configured_printers(session)
+        for name in newly_added:
+            try:
+                context.printer_manager.get(name).connect()
+            except Exception:  # noqa: BLE001 - best effort; monitor will retry via polling
+                pass
+
+    return newly_added

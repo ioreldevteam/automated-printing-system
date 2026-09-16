@@ -179,3 +179,47 @@ def test_crash_recovery_reclassifies_in_flight_units_as_unknown(seeded_product):
         RecoveryService(session).apply_decision(in_flight_unit_id, "not_printed")
         unit = UnitRepository(session).get(in_flight_unit_id)
         assert unit.overall_status == UnitStatus.QUEUED.value
+
+
+def test_job_pauses_cleanly_when_assigned_printer_is_not_registered(seeded_product):
+    """If a job is (mis)assigned to a printer name the PrinterManager doesn't
+    actually have -- e.g. the operator's dropdown selection referenced a
+    printer that never got registered/connected -- the job must pause with a
+    clear PRINTER_001 error instead of hanging forever with units stuck
+    mid-print and nothing recorded (the previous behaviour: printer_manager
+    .get() raised a bare KeyError that only the generic `except Exception` in
+    BaseQueueWorker.run() caught, so it was logged and silently retried
+    forever)."""
+    event_bus = EventBus()
+    printer_manager = PrinterManager()
+    printer_manager.load_from_config([
+        PrinterConfig(name="ANSER-01", type="ANSER", address="127.0.0.1", port=502, simulate=True,
+                      anser_modbus=AnserModbusConfig()),
+        # Deliberately no ZEBRA-01/real label printer registered.
+    ])
+    printer_manager.connect_all()
+    controller = ProductionController(
+        printer_manager=printer_manager, event_bus=event_bus, max_retries=3,
+        anser_printer_name="ANSER-01", zebra_printer_name="MISSING-PRINTER",
+        zebra_template_path=TEMPLATE_PATH,
+    )
+
+    job_id = _create_and_start_job(seeded_product, 3)
+
+    try:
+        controller.start_job(job_id)
+
+        def job_paused():
+            with session_scope() as session:
+                job = JobRepository(session).get(job_id)
+                return job is not None and job.status == JobStatus.PAUSED.value
+
+        assert _wait_for(job_paused, timeout=20.0), "job did not pause for the unregistered printer"
+
+        # The unit stuck at the Zebra stage should be RETRY_PENDING (i.e. a
+        # recorded, recoverable failure), not silently abandoned mid-print.
+        with session_scope() as session:
+            units = UnitRepository(session).list_for_job(job_id)
+            assert any(u.overall_status == UnitStatus.RETRY_PENDING.value for u in units)
+    finally:
+        controller.shutdown()

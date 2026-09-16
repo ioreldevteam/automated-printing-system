@@ -29,7 +29,8 @@ def run_startup_recovery(app_context, parent_widget) -> None:
 
     for summary in summaries:
         dialog = RecoveryDialog(summary, app_context.printer_monitor.printer_service,
-                                 app_context.production_controller.zebra_printer_name, parent_widget)
+                                 app_context.production_controller.resolve_zebra_printer_name(summary.job_id),
+                                 parent_widget)
         dialog.exec()
         if dialog.decision == "resume":
             app_context.production_controller.resume_job(summary.job_id, None)
@@ -38,6 +39,9 @@ def run_startup_recovery(app_context, parent_widget) -> None:
 
 
 def main() -> int:
+    qt_app = QApplication(sys.argv)
+    apply_light_theme(qt_app)
+
     config = load_config()
     configure_logging(config.logging)
     init_db(config.database.path)
@@ -51,14 +55,16 @@ def main() -> int:
     app_context.printer_manager.connect_all()
     app_context.printer_monitor.start()
 
-    qt_app = QApplication(sys.argv)
-    apply_light_theme(qt_app)
-
     login_dialog = LoginDialog(config.security.bcrypt_rounds)
     if login_dialog.exec() != LoginDialog.DialogCode.Accepted or login_dialog.authenticated_user is None:
         return 0
     current_user = login_dialog.authenticated_user
     app_context.current_user = current_user
+
+
+    main_window = MainWindow(app_context, current_user)
+    run_startup_recovery(app_context, main_window)
+    main_window.show()
 
     with session_scope() as session:
         auth_service = AuthService(session, config.security.bcrypt_rounds)
@@ -66,14 +72,11 @@ def main() -> int:
         using_default_password = user_record is not None and auth_service.is_using_default_password(user_record)
     if using_default_password:
         QMessageBox.warning(
-            None, "Change default password",
-            "The default admin account still uses the initial password. "
-            "Change it before deploying to production.",
+            main_window, "Change default password",
+            "The default admin account still uses the initial password. \n"
+            "Change it before deploying to production.\n\n"
+            "Default credentials: admin / admin",
         )
-
-    main_window = MainWindow(app_context, current_user)
-    run_startup_recovery(app_context, main_window)
-    main_window.show()
 
     return qt_app.exec()
 

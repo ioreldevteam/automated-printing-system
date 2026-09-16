@@ -1,6 +1,13 @@
 import pytest
 
-from app.printers.discovery import discover_cups_printers
+from app.printers import discovery
+from app.printers.discovery import (
+    DiscoveredPrinter,
+    discover_cups_printers,
+    discover_network_devices,
+    discover_printers,
+    ensure_cups_queue,
+)
 
 from app.domain.models import LabelData
 from app.domain.states import PrinterStatus
@@ -123,3 +130,185 @@ def test_discover_cups_printers_falls_back_to_system_queue_for_network_printers(
     assert [args for args in calls if args[:2] == ["/usr/bin/lpstat", "-p"]] == [["/usr/bin/lpstat", "-p", "-v"]]
     assert printers[0].name == "WIFI_PRINTER"
     assert printers[0].uri.startswith("ipp://192.168.1.42")
+
+
+def test_discover_network_devices_finds_wifi_printer_not_yet_installed(monkeypatch):
+    """A Wi-Fi MFP that was never added as a CUPS queue (so lpstat can't see
+    it) must still be found via lpinfo's dnssd/Bonjour backend -- this is the
+    "PS3 on MFP13901874" case: a driverless network printer advertised over
+    mDNS with a friendly name that includes spaces."""
+    monkeypatch.setattr("app.printers.discovery.shutil.which", lambda _: "/usr/bin/lpinfo")
+
+    class Result:
+        returncode = 0
+        stdout = (
+            "network socket\n"
+            "network http\n"
+            "network ipp\n"
+            "network ipps\n"
+            "network lpd\n"
+            "direct usb://EPSON/WF-3620%20Series?serial=XYZ\n"
+            "network dnssd://PS3%20on%20MFP13901874._ipp._tcp.local./?uuid=abc-123\n"
+        )
+        stderr = ""
+
+    monkeypatch.setattr("app.printers.discovery.subprocess.run", lambda *a, **k: Result())
+    printers = discover_network_devices()
+
+    assert len(printers) == 1
+    found = printers[0]
+    assert found.name == "PS3_on_MFP13901874"
+    assert found.uri.startswith("dnssd://PS3%20on%20MFP13901874")
+    assert found.source == "NETWORK"
+
+
+def test_discover_network_devices_returns_empty_without_lpinfo(monkeypatch):
+    monkeypatch.setattr("app.printers.discovery.shutil.which", lambda _: None)
+    assert discover_network_devices() == []
+
+
+def test_discover_printers_skips_already_installed_and_provisions_new(monkeypatch):
+    """discover_printers() should not duplicate a printer lpstat already
+    knows about, but should auto-create a CUPS queue (via lpadmin) for a
+    Wi-Fi printer that's only visible through lpinfo."""
+
+    def fake_which(cmd):
+        return f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr("app.printers.discovery.shutil.which", fake_which)
+
+    lpstat_result_type = type("R", (), {
+        "returncode": 0,
+        "stdout": (
+            "printer ZEBRA_01 is idle. enabled since Tue 15 Sep 2026\n"
+            "device for ZEBRA_01: socket://192.168.1.30:9100\n"
+        ),
+        "stderr": "",
+    })
+    lpinfo_result_type = type("R", (), {
+        "returncode": 0,
+        "stdout": (
+            "network dnssd://ZEBRA_01._ipp._tcp.local./?uuid=already-installed\n"
+            "network dnssd://PS3%20on%20MFP13901874._ipp._tcp.local./?uuid=new-printer\n"
+        ),
+        "stderr": "",
+    })
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[0].endswith("lpstat"):
+            return lpstat_result_type()
+        if command[0].endswith("lpinfo"):
+            return lpinfo_result_type()
+        if command[0].endswith("lpadmin"):
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        if command[0].endswith("avahi-browse"):
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        raise AssertionError(f"unexpected command {command}")
+
+    monkeypatch.setattr("app.printers.discovery.subprocess.run", fake_run)
+    printers = discover_printers()
+
+    names = {p.name for p in printers}
+    assert names == {"ZEBRA_01", "PS3_on_MFP13901874"}
+
+    lpadmin_calls = [c for c in calls if c[0].endswith("lpadmin")]
+    assert len(lpadmin_calls) == 1
+    assert "PS3_on_MFP13901874" in lpadmin_calls[0]
+    assert "-m" in lpadmin_calls[0] and "everywhere" in lpadmin_calls[0]
+
+
+def test_ensure_cups_queue_returns_false_without_lpadmin(monkeypatch):
+    monkeypatch.setattr("app.printers.discovery.shutil.which", lambda _: None)
+    printer = DiscoveredPrinter(name="PS3_on_MFP13901874", uri="dnssd://PS3%20on%20MFP13901874._ipp._tcp.local./")
+    assert ensure_cups_queue(printer) is False
+
+
+def test_discover_windows_printers_parses_get_printer_json(monkeypatch):
+    """Windows names Wi-Fi/WSD-discovered MFPs "<Driver> on <Host>" (e.g.
+    "PS3 on MFP13901874") and lists them immediately via Get-Printer once
+    they're connected -- no CUPS-style manual queue involved."""
+    monkeypatch.setattr("app.printers.discovery.shutil.which",
+                         lambda cmd: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+                         if "powershell" in cmd else None)
+
+    class Result:
+        returncode = 0
+        stdout = (
+            '[{"Name":"PS3 on MFP13901874","DriverName":"Microsoft IPP Class Driver",'
+            '"PortName":"192.168.1.55"},'
+            '{"Name":"Microsoft Print to PDF","DriverName":"Microsoft Print To PDF",'
+            '"PortName":"PORTPROMPT:"}]'
+        )
+        stderr = ""
+
+    monkeypatch.setattr("app.printers.discovery.subprocess.run", lambda *a, **k: Result())
+    printers = discovery.discover_windows_printers()
+
+    names = {p.name for p in printers}
+    assert "PS3 on MFP13901874" in names
+    ps3 = next(p for p in printers if p.name == "PS3 on MFP13901874")
+    assert ps3.uri == "192.168.1.55"
+    assert ps3.source == "WINDOWS"
+
+
+def test_discover_windows_printers_handles_single_object_json(monkeypatch):
+    """ConvertTo-Json returns a bare object (not an array) when there's only
+    one printer -- must not crash on that shape."""
+    monkeypatch.setattr("app.printers.discovery.shutil.which", lambda cmd: "/usr/bin/powershell")
+
+    class Result:
+        returncode = 0
+        stdout = '{"Name":"PS3 on MFP13901874","DriverName":"IPP","PortName":"192.168.1.55"}'
+        stderr = ""
+
+    monkeypatch.setattr("app.printers.discovery.subprocess.run", lambda *a, **k: Result())
+    printers = discovery.discover_windows_printers()
+    assert len(printers) == 1
+    assert printers[0].name == "PS3 on MFP13901874"
+
+
+def test_discover_windows_printers_returns_empty_without_powershell(monkeypatch):
+    monkeypatch.setattr("app.printers.discovery.shutil.which", lambda cmd: None)
+    assert discovery.discover_windows_printers() == []
+
+
+def test_discover_printers_routes_to_windows_when_platform_is_windows(monkeypatch):
+    monkeypatch.setattr("app.printers.discovery.is_windows", lambda: True)
+    monkeypatch.setattr("app.printers.discovery.discover_windows_printers",
+                         lambda: [DiscoveredPrinter(name="PS3 on MFP13901874", uri="192.168.1.55",
+                                                     source="WINDOWS")])
+    printers = discover_printers()
+    assert [p.name for p in printers] == ["PS3 on MFP13901874"]
+
+
+def test_windows_printer_connect_and_status(monkeypatch):
+    from app.printers.windows import WindowsPrinter
+    monkeypatch.setattr("app.printers.windows._powershell_executable", lambda: "/usr/bin/powershell")
+
+    class OkResult:
+        returncode = 0
+        stdout = "Normal"
+        stderr = ""
+
+    monkeypatch.setattr("app.printers.windows.subprocess.run", lambda *a, **k: OkResult())
+    printer = WindowsPrinter(name="PS3 on MFP13901874", port_name="192.168.1.55")
+    printer.connect()  # should not raise
+    status = printer.get_status()
+    assert status.connected is True
+
+
+def test_windows_printer_registered_via_printer_manager(monkeypatch):
+    """A printer discovered with source="WINDOWS" must be built as a
+    WindowsPrinter (not CupsPrinter), since CUPS doesn't exist on Windows."""
+    from app.printers.printer_manager import PrinterManager
+    from app.printers.windows import WindowsPrinter
+
+    manager = PrinterManager()
+    added = manager.register_discovered(
+        [DiscoveredPrinter(name="PS3 on MFP13901874", uri="192.168.1.55", source="WINDOWS")]
+    )
+    assert added == ["PS3 on MFP13901874"]
+    assert isinstance(manager.get("PS3 on MFP13901874"), WindowsPrinter)

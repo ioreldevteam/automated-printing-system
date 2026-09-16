@@ -89,7 +89,7 @@ class AnserModbusConfig(BaseModel):
 
 class PrinterConfig(BaseModel):
     name: str
-    type: str  # "ANSER" | "ZEBRA" | "SIMULATION"
+    type: str  # "ANSER" | "ZEBRA" | "CUPS" | "WINDOWS" | "SIMULATION"
     model: str = ""
     address: str = "127.0.0.1"
     port: int = 9100

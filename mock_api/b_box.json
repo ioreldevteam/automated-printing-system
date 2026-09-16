@@ -1,0 +1,50 @@
+[
+  {
+    "serial_code": "B-BOX-1011001-001",
+    "no_of_quantity": 10,
+    "batch_no": "BATCH-20260916-01",
+    "barcode": "8901234567890-B10",
+    "item_code": "101-1001",
+    "item_name": "Orel LED Bulb 9W Cool Daylight"
+  },
+  {
+    "serial_code": "B-BOX-1011001-002",
+    "no_of_quantity": 10,
+    "batch_no": "BATCH-20260916-01",
+    "barcode": "8901234567890-B10",
+    "item_code": "101-1001",
+    "item_name": "Orel LED Bulb 9W Cool Daylight"
+  },
+  {
+    "serial_code": "B-BOX-1022001-001",
+    "no_of_quantity": 10,
+    "batch_no": "BATCH-20260916-02",
+    "barcode": "8901234567891-B10",
+    "item_code": "102-2001",
+    "item_name": "Orel 1-Gang 1-Way Switch 10A"
+  },
+  {
+    "serial_code": "B-BOX-1022001-002",
+    "no_of_quantity": 10,
+    "batch_no": "BATCH-20260916-02",
+    "barcode": "8901234567891-B10",
+    "item_code": "102-2001",
+    "item_name": "Orel 1-Gang 1-Way Switch 10A"
+  },
+  {
+    "serial_code": "B-BOX-1033001-001",
+    "no_of_quantity": 10,
+    "batch_no": "BATCH-20260916-03",
+    "barcode": "8901234567892-B10",
+    "item_code": "103-3001",
+    "item_name": "Orel 13A Switched Socket Outlet"
+  },
+  {
+    "serial_code": "B-BOX-1033001-002",
+    "no_of_quantity": 10,
+    "batch_no": "BATCH-20260916-03",
+    "barcode": "8901234567892-B10",
+    "item_code": "103-3001",
+    "item_name": "Orel 13A Switched Socket Outlet"
+  }
+]
