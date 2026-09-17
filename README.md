@@ -23,7 +23,8 @@ The source of truth for the intended behavior is [industrial_printing_system_ful
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m app.main
+python run.py
+# or: python -m app.main
 ```
 
 On first run this seeds a default `admin` / `admin` account (Section 64) -- you'll get a startup warning until it's changed via a real user-management flow. Add at least one product from the Settings tab before creating a production job; the product catalog starts empty (Section 15).

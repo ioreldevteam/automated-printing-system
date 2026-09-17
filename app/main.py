@@ -3,12 +3,48 @@ operator reaches the dashboard).
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+# On Windows, Qt (installed via pip) no longer ships fonts.
+# Point it at the Windows system fonts directory so text renders correctly.
+if sys.platform == "win32":
+    win_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    if win_fonts.is_dir():
+        os.environ.setdefault("QT_QPA_FONTDIR", str(win_fonts))
+    # Suppress noisy Qt platform warnings that don't affect functionality
+    os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false")
+elif sys.platform.startswith("linux"):
+    # Default to XCB backend on Linux which works reliably on both X11 and Wayland (via XWayland)
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+    os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.wayland=false")
+
+from PySide6.QtCore import QtMsgType, qInstallMessageHandler  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+
+# Suppress harmless Qt platform-plugin warnings (propagateSizeHints, raise, etc.)
+# that are printed to stderr via qWarning() and cannot be silenced by
+# QT_LOGGING_RULES alone.  Only critical/fatal messages are forwarded.
+_SUPPRESS_FRAGMENTS = (
+    "propagateSizeHints",
+    "does not support raise",
+    "QFontDatabase: Cannot find font directory",
+    "Theme parsing error",
+)
+
+
+def _qt_message_handler(mode: QtMsgType, _context, message: str) -> None:  # noqa: ANN001
+    if any(frag in message for frag in _SUPPRESS_FRAGMENTS):
+        return
+    if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        print(f"[Qt] {message}", file=sys.stderr)
+
+
+qInstallMessageHandler(_qt_message_handler)
+
 
 from app.application.app_context import build_app_context
 from app.application.auth_service import AuthService
